@@ -1,0 +1,18 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 1
+bytecode_hash = "none"
+cbor_metadata = false
+verbosity = 3
+
+# Robinhood Chain (Arbitrum Orbit L2)
+# mainnet : chain id 4663  | https://rpc.mainnet.chain.robinhood.com
+# testnet : chain id 46630 | https://rpc.testnet.chain.robinhood.com
+# 部署时直接用 --rpc-url 传入，如：
+#   forge script script/Deploy.s.sol --rpc-url https://rpc.testnet.chain.robinhood.com --broadcast

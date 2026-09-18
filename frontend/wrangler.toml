@@ -1,0 +1,30 @@
+# JackpotHood — frontend + draw keeper on Cloudflare Workers
+# Deploy: npx wrangler deploy  (free *.workers.dev subdomain, HTTPS included)
+
+name = "jackpothood"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static frontend (Vite output in ./dist)
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# Draw keeper: tick every 2 minutes (UTC); actions are idempotent, so a tick
+# missed at 00:00 UTC self-heals on the next one.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+# Robinhood Chain RPC (switch to https://rpc.mainnet.chain.robinhood.com for mainnet)
+RPC_URL = "https://rpc.testnet.chain.robinhood.com"
+# Deployed JackpotHood contract address (public — anyone can read the chain)
+CONTRACT_ADDRESS = "0x60845c1dd6849636087eabadda848d1d5cf5e587"
+# 测试网自动回购（主网上线前改为 "false"）
+AUTO_BUYBACK = "true"
+MOCK_TOKEN_ADDRESS = "0x61F2B7B38712205bab1a62F0b7400E015BAF5E19"
+DEX_ROUTER = "0xdab7937557f7581d4716ba29da5fdcb4217bdcd8"
+DEX_WETH = "0x9eB818e23E02f23dfD7e6b34f26A5E5Ebd698B99"
+
+# KEEPER_PK is a secret: npx wrangler secret put KEEPER_PK

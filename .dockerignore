@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+*.log
+out
+cache
+broadcast
+lib
+docs
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/.dev.vars
+**/node_modules
+**/dist
+.devdata

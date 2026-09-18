@@ -1,0 +1,22 @@
+out/
+cache/
+node_modules/
+frontend/dist/
+.env
+.env.*
+!.env.example
+broadcast/
+coverage/
+coverage.json
+gas-snapshot/
+frontend/.dev.vars
+.devdata
+
+# 开源卫生（2026-09-18）：工作文件与本地数据不进仓库
+_audit/
+*.log
+logs_*.json
+a1fc_txs.json
+tx_a199.json
+frontend/.wrangler/
+frontend/__pycache__/

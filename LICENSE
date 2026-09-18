@@ -1,0 +1,49 @@
+Business Source License 1.1
+
+Licensor:      JackpotHood
+Licensed Work: JackpotHood protocol smart contracts
+               (all Solidity source files under src/, script/, test/,
+               marked with SPDX-License-Identifier: BUSL-1.1)
+Change Date:   2028-09-18
+Change License: MIT License
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of the Licensed Work, whichever comes first, the
+Licensor hereby grants you rights under the terms of the Change License, and
+the rights granted in the paragraph above terminate.
+
+For the avoidance of doubt:
+- Reading, auditing, and integrating AGAINST deployed instances of the
+  Licensed Work (i.e., calling the deployed contracts) is always permitted.
+- Deploying the Licensed Work, or a modification of it, to operate a COMPETING
+  commercial service (including a competing VRF/randomness or lottery service)
+  before the Change Date is NOT permitted.
+
+--------------------------------------------------------------------------------
+
+BUSL 1.1 standard text:
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. Any
+other use, including without limitation production use, requires the rights
+granted by the Licensor under an Additional Use Grant or the Change License
+after the Change Date.
+
+If you violate the terms of this license, your rights under it terminate
+automatically.
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+Complete license text: https://spdx.org/licenses/BUSL-1.1.html
+
+================================================================================
+
+NOTE ON SCOPE:
+- src/, script/, test/ (Solidity contracts)      → BUSL-1.1 (this file)
+- docs/, examples/, README                       → MIT License (see LICENSE-MIT)
+- frontend/ (web app & ops server)               → MIT License (see LICENSE-MIT)
+- lib/forge-std/                                 → third-party, its own license
