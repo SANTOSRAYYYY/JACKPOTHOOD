@@ -7,7 +7,7 @@ pragma solidity 0.8.28;
 ///      - 6 位号码，6 奖级（40/25/15/12/5/3），奖池与派彩全部为 ETH（天然通缩，无增发）
 ///      - 小奖项公平赔率封顶：单注赔付上限 = 命中率倒数（公平赔率）× 票价（末5~末1 = 100000/10000/1000/100/10 ×），头奖不限，超出部分滚存下期
 ///      - 买票抽水 10%：有推荐人时 5% 立付推荐人 + 5% 进质押分红池；无推荐人 10% 全进池（settle 时按 ETH 质押快照份额分配）
-///      - 中奖领取再抽 12%：推荐人 5%（若有）+ 质押池 7%（无推荐人时 12% 全入池）
+///      - 中奖领取再抽 12%：推荐人 5%（若有，拒收则并入质押池）+ 质押池 7%（无推荐人时 12% 全入池）
 ///      - ETH 质押（活期）：按每期结算时刻的份额瓜分分红池，手动领取；退出走三段式
 ///        （requestUnstake 申请 → 陪跑登记轮结算 → finalizeUnstake 领取），防结算前抢跑规避共担
 ///      - JPH 质押（Perks 合约，独立、不参与 ETH 分红）：每 100,000 JPH = 每天 1 张免费票，未领上限 3 张
@@ -148,6 +148,7 @@ contract JackpotHood {
     event TicketsRefunded(uint256 indexed roundId, address indexed user, uint256 ticketCount, uint256 amount);
     event ReferrerSet(address indexed user, address indexed referrer);
     event ReferralPurchasePaid(address indexed buyer, address indexed referrer, uint256 amount); // 购票侧推荐 5% 立付（仅实付时 emit）
+    event ReferralClaimFallback(address indexed user, address indexed referrer, uint256 amount); // 中奖侧推荐人拒收：其 5% 并入质押分红池
     event Paused(address indexed by);
     event Unpaused(address indexed by);
     event AdminTransferStarted(address indexed currentAdmin, address indexed newAdmin);
@@ -343,8 +344,8 @@ contract JackpotHood {
 
     /// @dev 购票侧推荐分成：_record 已把 10% 抽水全额记进 ticketFee；付款人有推荐人时，
     ///      从中拿出 5%（fee − fee/2，截断奇数 wei 归推荐人）立付推荐人并冲减 ticketFee。
-    ///      推荐人拒收（合约 fallback 回滚）则不冲减——该份额留在 ticketFee 进质押池，
-    ///      购票不被卡死。无推荐人时不动作（10% 全留池，现状不变）。
+    ///      推荐人拒收（合约 fallback 回滚/烧 gas）则不冲减——该份额留在 ticketFee 进质押池，
+    ///      购票不被卡死。无推荐人时不动作（10% 全留池，现状不变）。call 限 50k gas 防烧 gas 勒索。
     ///      注：单注抽水 = TICKET_PRICE × BUY_FEE_BPS / 10000 = 1e14 wei 整除，逐行累计与
     ///      按批总额计算的 fee 精确相等，冲减不会透支 ticketFee。
     function _splitBuyFee(uint256 rid, address payer, uint256 total) internal {
@@ -352,7 +353,7 @@ contract JackpotHood {
         if (referrer == address(0)) return;
         uint256 fee = total * BUY_FEE_BPS / 10000;
         uint256 refShare = fee - fee / 2;
-        (bool ok, ) = payable(referrer).call{value: refShare}("");
+        (bool ok, ) = payable(referrer).call{value: refShare, gas: 50000}("");
         if (!ok) return; // 拒收：份额留在 ticketFee（全额 10% 进质押池）
         rounds[rid].ticketFee -= refShare;
         referralPaidPerRound[rid] += refShare;
@@ -659,8 +660,13 @@ contract JackpotHood {
         }
         stakingPool += fee;
         if (refShare > 0) {
-            (bool okRef, ) = payable(referrer).call{value: refShare}("");
-            require(okRef, "JPH: ref transfer failed");
+            // 与购票侧同口径容错（V4.5）：拒收/烧 gas 则 5% 并入质押池并记事件，领奖不卡死；
+            // call 限 50k gas 防烧 gas 勒索
+            (bool okRef, ) = payable(referrer).call{value: refShare, gas: 50000}("");
+            if (!okRef) {
+                stakingPool += refShare;
+                emit ReferralClaimFallback(msg.sender, referrer, refShare);
+            }
         }
         (bool ok, ) = payable(msg.sender).call{value: net}("");
         require(ok, "JPH: transfer failed");

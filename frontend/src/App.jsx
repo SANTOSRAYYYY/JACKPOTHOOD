@@ -1490,7 +1490,7 @@ function ChargeCard({ account, wallet, t, refreshTick }) {
       const res = await fetch('/api/draw', {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ addr: account, tier, sig }),
+        body: JSON.stringify({ addr: account, tier, sig, streakStart }),
       })
       if (res.status === 409) {
         setDraw(null)

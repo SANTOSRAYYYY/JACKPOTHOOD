@@ -97,11 +97,13 @@ async function runDrawJob() {
   if (!CONTRACT || CONTRACT === ZERO || !KEEPER_PK) return 'not-configured'
   if (jobRunning) return 'busy'
   jobRunning = true
-  const account = privateKeyToAccount(KEEPER_PK)
-  const pc = createPublicClient({ chain, transport: vhttp(RPC_URL) })
-  const wc = createWalletClient({ chain, account, transport: vhttp(RPC_URL) })
   const summary = { action: 'none' }
   try {
+    // 私钥解析/客户端构造必须在 try 内：KEEPER_PK 配错时走 catch 记 lastResult 并解锁，
+    // 否则 jobRunning 永卡 true、keeper 静默停摆直到重启
+    const account = privateKeyToAccount(KEEPER_PK)
+    const pc = createPublicClient({ chain, transport: vhttp(RPC_URL) })
+    const wc = createWalletClient({ chain, account, transport: vhttp(RPC_URL) })
     const nowSec = BigInt(Math.floor(Date.now() / 1000))
     const rid = await pc.readContract({ address: CONTRACT, abi: jackpotAbi, functionName: 'currentRoundId' })
     const scanFloor = Math.max(1, Number(rid) - 4)
@@ -168,10 +170,40 @@ const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 const cache = new Map()
 const TTL = { state: 5000, mytickets: 8000, feed: 60000, board: 60000 }
 
+// 简易容量上限：满 5000 条淘汰最旧 1/4（防 addr/id 参数枚举造成的内存膨胀）
+function mapBoundedSet(map, key, val, cap = 5000) {
+  if (map.size >= cap && !map.has(key)) {
+    const drop = Math.floor(cap / 4)
+    let i = 0
+    for (const k of map.keys()) { map.delete(k); if (++i >= drop) break }
+  }
+  map.set(key, val)
+}
+
 function cached(key, ttlMs, fn) {
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < ttlMs) return hit.val
-  return fn().then((val) => { cache.set(key, { at: Date.now(), val }); return val })
+  return fn().then((val) => { mapBoundedSet(cache, key, { at: Date.now(), val }); return val })
+}
+
+// RPC 单请求事件上限（~10000 条）防护：全历史扫描按块段顺序推进；
+// 某段报错（单段事件超上限或块范围超 RPC 限制）就把段长对半细分重试，段长触底才上抛
+async function getLogsChunked(pc, params, chunk = 2000000n) {
+  const latest = await pc.getBlockNumber()
+  const out = []
+  let from = BigInt(params.fromBlock)
+  while (from <= latest) {
+    const to = from + chunk - 1n > latest ? latest : from + chunk - 1n
+    try {
+      const logs = await pc.getLogs({ ...params, fromBlock: from, toBlock: to })
+      out.push(...logs)
+      from = to + 1n
+    } catch (e) {
+      if (chunk <= 1000n) throw e
+      chunk = chunk / 2n
+    }
+  }
+  return out
 }
 
 function roundJson(r) {
@@ -227,7 +259,7 @@ async function buildState(pc) {
 async function buildFeed(pc) {
   try {
     const created = BigInt(process.env.CONTRACT_CREATED || '115109533') // 合约创建块（主网部署时改）
-    const logs = await pc.getLogs({ address: CONTRACT, event: prizeAbi[0], fromBlock: created, toBlock: 'latest' })
+    const logs = await getLogsChunked(pc, { address: CONTRACT, event: prizeAbi[0], fromBlock: created })
     return logs.slice(-10).map((lg) => ({
       roundId: Number(lg.args.roundId), user: lg.args.user,
       amount: lg.args.amount.toString(),
@@ -247,9 +279,9 @@ async function buildMyTickets(pc, addr) {
   const created = BigInt(process.env.CONTRACT_CREATED || '115109533')
   // 全历史事件扫描 → 用户有票据的全部期次（不再限最近 5 期；领奖不再漏老期次）
   const [purchased, gifted, free] = await Promise.all([
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addr }, fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[1], args: { recipient: addr }, fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[2], args: { recipient: addr }, fromBlock: created, toBlock: 'latest' }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addr }, fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[1], args: { recipient: addr }, fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[2], args: { recipient: addr }, fromBlock: created }),
   ])
   const idSet = new Set()
   for (const lg of [...purchased, ...gifted, ...free]) idSet.add(Number(lg.args.roundId))
@@ -317,10 +349,10 @@ async function buildLeaderboard(pc) {
   if (!CONTRACT || CONTRACT === ZERO_ADDR) return { ok: false, reason: 'not-configured' }
   const created = BigInt(process.env.CONTRACT_CREATED || '115109533')
   const [refLogs, claimLogs, buyLogs, refPaidLogs] = await Promise.all([
-    pc.getLogs({ address: CONTRACT, event: referrerAbi[0], fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: prizeAbi[0], fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[0], fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: refPurchaseAbi[0], fromBlock: created, toBlock: 'latest' }),
+    getLogsChunked(pc, { address: CONTRACT, event: referrerAbi[0], fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: prizeAbi[0], fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[0], fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: refPurchaseAbi[0], fromBlock: created }),
   ])
   // 购票榜：按 buyer 累加 count
   const bought = new Map()
@@ -385,12 +417,12 @@ async function buildMe(pc, addr) {
   const zero = () => 0n
   const [purchased, gifted, free, claimLogs, refLogs, refPaidLogs, mt,
     ethStaked, pendingStake, jphStaked, jphPerk, perkBal, nftCount] = await Promise.all([
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addr }, fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[1], args: { recipient: addr }, fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: ticketEventAbi[2], args: { recipient: addr }, fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: prizeAbi[0], fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: referrerAbi[0], fromBlock: created, toBlock: 'latest' }),
-    pc.getLogs({ address: CONTRACT, event: refPurchaseAbi[0], args: { referrer: addr }, fromBlock: created, toBlock: 'latest' }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addr }, fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[1], args: { recipient: addr }, fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[2], args: { recipient: addr }, fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: prizeAbi[0], fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: referrerAbi[0], fromBlock: created }),
+    getLogsChunked(pc, { address: CONTRACT, event: refPurchaseAbi[0], args: { referrer: addr }, fromBlock: created }),
     buildMyTickets(pc, addr),
     pc.readContract({ address: CONTRACT, abi: jackpotAbi, functionName: 'ethStaked', args: [addr] }).catch(zero),
     pc.readContract({ address: CONTRACT, abi: jackpotAbi, functionName: 'pendingStakeRewards', args: [addr] }).catch(zero),
@@ -483,6 +515,7 @@ const DEFAULT_PRIZES = {
 
 let gcsToken = null // { token, exp }：metadata server 令牌缓存（提前 60s 刷新）
 let gcsOk = null    // null=未探测 / true=GCS / false=本地兜底
+let gcsOkAt = 0     // 探测时刻：false 只钉 60s（metadata 瞬时故障不得把生产永久打进本地模式）
 
 async function gcsAccessToken() {
   if (gcsToken && Date.now() < gcsToken.exp) return gcsToken.token
@@ -498,8 +531,10 @@ async function gcsAccessToken() {
 
 async function useGcs() {
   if (!PRIZE_BUCKET) return false
-  if (gcsOk !== null) return gcsOk
+  // true 结果长期缓存；false 结果 60s 后允许重探，防止首探瞬时失败造成数据分叉/丢失
+  if (gcsOk !== null && (gcsOk || Date.now() - gcsOkAt < 60000)) return gcsOk
   try { await gcsAccessToken(); gcsOk = true } catch { gcsOk = false }
+  gcsOkAt = Date.now()
   return gcsOk
 }
 
@@ -627,14 +662,14 @@ const DAY_MS = 86400000
 
 async function computeStreak(pc, addrLower) {
   const created = BigInt(process.env.CONTRACT_CREATED || '115109533')
-  const logs = await pc.getLogs({ address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addrLower }, fromBlock: created, toBlock: 'latest' })
+  const logs = await getLogsChunked(pc, { address: CONTRACT, event: ticketEventAbi[0], args: { buyer: addrLower }, fromBlock: created })
   // 同一批里相同块只取一次；分批并发（每批 20，避免 RPC 突发）
   const uniq = [...new Set(logs.map((lg) => lg.blockNumber))]
   const missing = uniq.filter((b) => !blockTsCache.has(b))
   for (let i = 0; i < missing.length; i += 20) {
     const batch = missing.slice(i, i + 20)
     const blocks = await Promise.all(batch.map((b) => pc.getBlock({ blockNumber: b })))
-    blocks.forEach((blk, j) => blockTsCache.set(batch[j], Number(blk.timestamp)))
+    blocks.forEach((blk, j) => mapBoundedSet(blockTsCache, batch[j], Number(blk.timestamp)))
   }
   // 按 UTC 日聚合计票
   const byDay = new Map()
@@ -709,15 +744,28 @@ async function buildStreaks(addr) {
   }
 }
 
+// GCS list 翻页（最多 10 页防失控）：对象超过单页 1000 后不再静默缺漏
+async function gcsListAll(token, prefix) {
+  const items = []
+  let pageToken = ''
+  for (let page = 0; page < 10; page++) {
+    const u = `https://storage.googleapis.com/storage/v1/b/${PRIZE_BUCKET}/o?prefix=${encodeURIComponent(prefix)}` +
+      (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '')
+    const r = await fetch(u, { headers: { authorization: 'Bearer ' + token } })
+    if (!r.ok) throw new Error('gcs list ' + r.status)
+    const data = await r.json()
+    items.push(...(data.items || []))
+    if (!data.nextPageToken) break
+    pageToken = data.nextPageToken
+  }
+  return items
+}
+
 // 列出 draws/ 下全部对象名（GCS list / 本地 readdir），返回统一的对象名数组
 async function listDrawNames() {
   if (await useGcs()) {
     const token = await gcsAccessToken()
-    const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${PRIZE_BUCKET}/o?prefix=draws/`, {
-      headers: { authorization: 'Bearer ' + token },
-    })
-    if (!r.ok) throw new Error('gcs list ' + r.status)
-    return ((await r.json()).items || []).map((it) => it.name)
+    return (await gcsListAll(token, 'draws/')).map((it) => it.name)
   }
   await mkdir(DEVDATA, { recursive: true })
   return (await readdir(DEVDATA)).filter((f) => f.startsWith('draws__')).map((f) => 'draws/' + f.slice(7))
@@ -728,12 +776,8 @@ async function buildRecentDraws() {
   let names
   if (await useGcs()) {
     const token = await gcsAccessToken()
-    const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${PRIZE_BUCKET}/o?prefix=draws/`, {
-      headers: { authorization: 'Bearer ' + token },
-    })
-    if (!r.ok) throw new Error('gcs list ' + r.status)
     // list 返回自带 updated 字段，取最近修改 top 20 再读内容
-    names = ((await r.json()).items || [])
+    names = (await gcsListAll(token, 'draws/'))
       .sort((a, b) => String(b.updated).localeCompare(String(a.updated)))
       .slice(0, 20)
       .map((it) => it.name)
@@ -794,15 +838,29 @@ const ADDR_RE = /^0x[0-9a-f]{40}$/
 const rlBuckets = new Map()
 function rateLimit(key, limit, windowMs) {
   const now = Date.now()
-  const arr = (rlBuckets.get(key) || []).filter((t) => now - t < windowMs)
-  if (arr.length >= limit) { rlBuckets.set(key, arr); return false }
-  arr.push(now)
-  rlBuckets.set(key, arr)
-  if (rlBuckets.size > 10000) rlBuckets.clear() // 防内存膨胀（极端枚举时粗清）
+  const b = rlBuckets.get(key) || { hits: [], w: windowMs }
+  b.hits = b.hits.filter((t) => now - t < b.w)
+  if (b.hits.length >= limit) { rlBuckets.set(key, b); return false }
+  b.hits.push(now)
+  rlBuckets.set(key, b)
+  // 防内存膨胀：超限只淘汰已过期条目——不全清，攻击期间限流必须持续有效
+  if (rlBuckets.size > 10000) {
+    for (const [k, v] of rlBuckets) {
+      v.hits = v.hits.filter((t) => now - t < v.w)
+      if (v.hits.length === 0) rlBuckets.delete(k)
+    }
+  }
   return true
 }
-const clientIp = (req) =>
-  String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
+// 取信模型：回环直连（本地开发/自检）没有代理追加，XFF 可由客户端任意伪造 → 只信 socket；
+// 云上对端恒为 GFE，客户端自带的伪造 XFF 会被 GFE 把真实客户端 IP 追加到末尾 → 取最后一个元素
+const clientIp = (req) => {
+  const raw = String(req.socket.remoteAddress || '')
+  const peer = raw.replace(/^::ffff:/, '')
+  if (peer === '127.0.0.1' || peer === '::1') return raw || 'unknown'
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean)
+  return xff[xff.length - 1] || raw || 'unknown'
+}
 
 // 管理验签：恢复签名者 → 必须等于链上 admin()；ts 防陈旧（10 分钟窗口）+ 签名注册表防重放（48h 内同签名拒用）
 async function checkAdmin(sig, message, ts) {
@@ -845,14 +903,20 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(301, { location: 'https://www.jackpothood.com' + url.pathname + url.search })
     return res.end()
   }
-  const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)) }
+  const json = (code, obj) => {
+    const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' }
+    if (code === 429) headers['retry-after'] = '60'
+    res.writeHead(code, headers); res.end(JSON.stringify(obj))
+  }
   try {
     if (url.pathname === '/__keeper') {
+      if (!rateLimit('kp:' + clientIp(req), 2, 60000)) return json(429, { error: 'rate-limited' })
       const result = await runDrawJob()
-      return json(200, { ok: true, result, lastRun })
+      // 错误明细（RPC URL、回退原因等）不外泄，只回动作简述
+      return json(200, { ok: true, result: String(result).startsWith('error:') ? 'error' : result })
     }
     if (url.pathname === '/health' || url.pathname === '/healthz') {
-      return json(200, { ok: true, lastRun, lastResult })
+      return json(200, { ok: true, lastRun })
     }
     if (url.pathname === '/api/state') {
       const val = await cached('state', TTL.state, () => withFailover((pc) => buildState(pc)))
@@ -860,6 +924,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/mytickets') {
       const addr = (url.searchParams.get('addr') || '').toLowerCase()
+      if (!rateLimit('mt:' + clientIp(req), 30, 60000)) return json(429, { error: 'rate-limited' })
       const val = await cached('mt-' + addr, TTL.mytickets, () => withFailover((pc) => buildMyTickets(pc, addr)))
       return json(val.ok ? 200 : 400, val)
     }
@@ -867,14 +932,16 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/round') {
       const id = url.searchParams.get('id') || ''
       if (!/^\d+$/.test(id) || Number(id) < 1) return json(400, { ok: false, reason: 'bad-id' })
+      if (!rateLimit('rd:' + clientIp(req), 30, 60000)) return json(429, { error: 'rate-limited' })
       const val = await cached('r-' + id, TTL.state, () => withFailover(async (pc) => {
         const r = await readRound(pc, CONTRACT, BigInt(id))
         return { ok: true, round: roundJson(r) }
       }))
       return json(200, val)
     }
-    // 三榜聚合：全历史事件扫描，60s 缓存；扫描失败抛错 → 500
+    // 三榜聚合：全历史分块事件扫描，60s 缓存；扫描失败抛错 → 500
     if (url.pathname === '/api/leaderboard') {
+      if (!rateLimit('lb:' + clientIp(req), 20, 60000)) return json(429, { error: 'rate-limited' })
       const val = await cached('board', TTL.board, () => withFailover((pc) => buildLeaderboard(pc)))
       return json(val.ok ? 200 : 503, val)
     }
@@ -882,6 +949,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/me') {
       const addr = (url.searchParams.get('addr') || '').toLowerCase()
       if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return json(400, { ok: false, reason: 'bad-address' })
+      if (!rateLimit('me:' + clientIp(req), 30, 60000)) return json(429, { error: 'rate-limited' })
       const val = await cached('me-' + addr, TTL.mytickets, () => withFailover((pc) => buildMe(pc, addr)))
       return json(val.ok ? 200 : 400, val)
     }
@@ -900,18 +968,31 @@ const server = http.createServer(async (req, res) => {
       const val = await cached('recent-draws', 60000, () => buildRecentDraws())
       return json(200, val)
     }
-    // 抽奖：限流 → 重算 streak（不信缓存）→ 验签 → 原子变更内重校额度 + 落档（写冲突重读重校，杜绝并发双抽）
+    // 抽奖：限流 → 验签（客户端带 streakStart 时可前置，见下）→ 重算 streak（不信缓存）→ 原子变更内重校额度 + 落档（写冲突重读重校，杜绝并发双抽）
     if (url.pathname === '/api/draw' && req.method === 'POST') {
       if (!rateLimit('draw:' + clientIp(req), 10, 60000)) return json(429, { error: 'rate-limited' })
       const body = await readBody(req)
       const addr = String(body.addr || '').toLowerCase()
       const tier = body.tier
       if (!ADDR_RE.test(addr) || (tier !== 'small' && tier !== 'big')) return json(400, { error: 'bad-request' })
-      const st = await withFailover((pc) => computeStreak(pc, addr))
+      // 验签尽量前移到昂贵的链上扫描之前：客户端可带上签名时所用的 streakStart（可选字段），
+      // 服务端先用它构造消息验签（纯本地运算），扫描后再重算比对，不一致 401 让前端重签；
+      // 旧版前端不带该字段 → 走 legacy 路径（扫描后验签，行为同旧版），由上面的 IP 限流兜底扫描成本
+      const cs = /^(\d{4}-\d{2}-\d{2}|none)$/.test(String(body.streakStart || '')) ? String(body.streakStart) : null
+      let st
+      if (cs !== null) {
+        const preMsg = 'JackpotHood 抽奖授权\n地址:' + addr + '\n档位:' + tier + '\n周期:' + cs
+        const okPre = await verifyMessage({ address: addr, message: preMsg, signature: body.sig }).catch(() => false)
+        if (!okPre) return json(401, { error: 'bad-sig' })
+        st = await withFailover((pc) => computeStreak(pc, addr))
+        if ((st.streakStart || 'none') !== cs) return json(401, { error: 'stale-streak' })
+      } else {
+        st = await withFailover((pc) => computeStreak(pc, addr))
+        const message = 'JackpotHood 抽奖授权\n地址:' + addr + '\n档位:' + tier + '\n周期:' + (st.streakStart || 'none')
+        const okSig = await verifyMessage({ address: addr, message, signature: body.sig }).catch(() => false)
+        if (!okSig) return json(401, { error: 'bad-sig' })
+      }
       const earned = computeEarned(st.streakDays, st.streakStart, st.ticketsByDay)
-      const message = 'JackpotHood 抽奖授权\n地址:' + addr + '\n档位:' + tier + '\n周期:' + (st.streakStart || 'none')
-      const okSig = await verifyMessage({ address: addr, message, signature: body.sig }).catch(() => false)
-      if (!okSig) return json(401, { error: 'bad-sig' })
       const prizes = await readPrizes()
       let entry = null
       const res = await mutateStore('draws/' + addr + '.json', (raw) => {
@@ -929,7 +1010,8 @@ const server = http.createServer(async (req, res) => {
       cache.delete('stk-' + addr)
       return json(200, { ok: true, prize: { index: entry.prizeIndex, name: entry.name }, id: entry.id })
     }
-    // 领奖登记：won → claimed
+    // 领奖登记：won → claimed（走 mutateStore 原子变更：fn 内重找记录、重校状态，
+    // 写冲突重读重跑——杜绝与并发 draw/grant/fulfill 之间的丢失更新）
     if (url.pathname === '/api/draws/claim' && req.method === 'POST') {
       const body = await readBody(req)
       const addr = String(body.addr || '').toLowerCase()
@@ -937,12 +1019,17 @@ const server = http.createServer(async (req, res) => {
       if (!ADDR_RE.test(addr) || !id) return json(400, { error: 'bad-request' })
       const okSig = await verifyMessage({ address: addr, message: 'JackpotHood 领奖登记\n' + id, signature: body.sig }).catch(() => false)
       if (!okSig) return json(401, { error: 'bad-sig' })
-      const rec = await readDraws(addr)
-      const d = rec.draws.find((x) => x.id === id)
-      if (!d) return json(404, { error: 'not-found' })
-      if (d.status !== 'won') return json(409, { error: 'bad-status' })
-      d.status = 'claimed'
-      await storeWrite('draws/' + addr + '.json', rec)
+      let status = 404
+      const res = await mutateStore('draws/' + addr + '.json', (raw) => {
+        const rec = normalizeDraws(raw)
+        const d = rec.draws.find((x) => x.id === id)
+        if (!d) return undefined
+        if (d.status !== 'won') { status = 409; return undefined }
+        d.status = 'claimed'
+        return rec
+      })
+      if (!res.applied) return json(status, { error: status === 409 ? 'bad-status' : 'not-found' })
+      cache.delete('stk-' + addr)
       return json(200, { ok: true })
     }
     // ---------- 管理（签名者必须 == 链上 admin()） ----------
@@ -957,7 +1044,8 @@ const server = http.createServer(async (req, res) => {
         p && typeof p.name === 'string' && p.name.length > 0 && p.name.length <= 40 &&
         Number.isInteger(p.weight) && p.weight >= 0 && p.weight <= 10000)
       if (!cfg || !validTier(cfg.small) || !validTier(cfg.big)) return json(400, { error: 'bad-config' })
-      await storeWrite('config/prizes.json', { small: cfg.small, big: cfg.big, updatedAt: Date.now() })
+      // 收编进 mutateStore：与 draws 同一把按 key 进程锁 + 条件写，杜绝裸写绕过
+      await mutateStore('config/prizes.json', () => ({ small: cfg.small, big: cfg.big, updatedAt: Date.now() }))
       cache.delete('prizes')
       return json(200, { ok: true })
     }
@@ -1007,7 +1095,11 @@ const server = http.createServer(async (req, res) => {
     }
     await serveStatic(req, res, url.pathname)
   } catch (e) {
-    json((e && e.http) || 500, { ok: false, error: String(e && e.message || e) })
+    // 客户端错误（400 bad json / 413 body too large，带 err.http）原样回；
+    // 内部错误统一脱敏为 internal，明细只进日志（防 RPC URL、GCS 细节等随 500 外泄）
+    if (e && e.http) return json(e.http, { ok: false, error: String(e.message || e) })
+    console.error('unhandled error:', e)
+    json(500, { ok: false, error: 'internal' })
   }
 })
 

@@ -30,13 +30,13 @@ const TESTNET = {
   chainName: 'Robinhood Chain Testnet',
   rpcUrl: 'https://rpc.testnet.chain.robinhood.com',
   explorerUrl: 'https://explorer.testnet.chain.robinhood.com',
-  jackpot: '0x9fCB876196586B828A5c42e4287fFCB3BAACc806',
+  jackpot: '0x451D6b9Ceb23C8f6BE9C285cd3B7Db62EeDEBE00',
   token: '0xa4c7CC40653Db4af3E2b3642D992088De94Be427',
   dexPair: '0xff8EA0BfBe62f55e0A317814Be7e5817912794cb',
   dexRouter: '0x802EbEc5A32A8B70D0f84630B33B6728F7EeE18c',
   dexWeth: '0x9eB818e23E02f23dfD7e6b34f26A5E5Ebd698B99',
   dexPairCreated: 115712152, // 交易对创建区块（K 线扫描起点）
-  jackpotCreated: 118940651, // V4.4 core+perks（质押两段式退出 + 购票推荐 5% 立付；字节码 24279B 贴近 EIP-170 上限）
+  jackpotCreated: 122640404, // V4.5 core（claim 侧推荐人容错 + 推荐转账 50k gas 上限）
   nft: '0xB51cE45F61E2E387a3b663a7bA0F51207834c38e', // 创世 NFT 合约
   nftCreated: 115712152, // 创世 NFT 合约创建区块
 }
@@ -86,10 +86,10 @@ export const DEX_ROUTER = ACTIVE.dexRouter
 export const DEX_WETH = ACTIVE.dexWeth
 export const DEX_PAIR_CREATED = BigInt(ACTIVE.dexPairCreated || 0)
 export const JACKPOT_CREATED = BigInt(ACTIVE.jackpotCreated || 0)
-export const PERKS_ADDRESS = '0x6baefD034328A827F1bd08D6F1DaAed1c5A0e098' // V4.4 新 Perks（指向 PerkRouter）
+export const PERKS_ADDRESS = '0xEABa2EDCe074C72e1E20bA6Cd711841c7912c2aC' // V4.5 新 Perks（指向新 PerkRouter）
 
 // 社区轮预售 + 创世 NFT2 + PerkRouter（2026-09-14 测试网部署）
-export const PERK_ROUTER = '0x9f63Cfc9e7cE76efFd0209504d8842c913B26D87'
+export const PERK_ROUTER = '0x6dE1F40951f0a8677e121A36857AB4e18E0F1dB7'
 export const PRESALE_ADDRESS = '0xa29c858E6d48b1d39a82E7009776c5D9f96b63D8'
 export const NFT2_ADDRESS = '0xB9E8311a105C92b0fcEDe203F95f1DFe050335d2'
 
