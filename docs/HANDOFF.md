@@ -44,12 +44,15 @@ JPH 代币质押（独立 Perks 合约）每天赚免费票。免费票/赠票/�
 
 | 组件 | 地址 | 创建块 | 说明 |
 |---|---|---|---|
-| **JackpotHood core**（主合约，**V4.4 当前版**） | `0x9fCB876196586B828A5c42e4287fFCB3BAACc806` | 118940651 | 轮参数 600s/120s lock/anchorFirst=false；MAX_BATCH_TICKETS=1000；V4.3 封顶 + V4.2 审计修复全保留 + **质押两段式退出（requestUnstake→陪跑本轮结算→finalizeUnstake，防结算前抢跑）+ 购票推荐 5% 立付（ReferralPurchasePaid 事件）**；字节码 24279B（EIP-170 余量 297B）；unstakeEth 已删除；**perkContract 现已指向 PerkRouter**（09-14 社区轮起） |
-| **PerkRouter**（免费票路由，**当前生效**） | `0x9f63Cfc9e7cE76efFd0209504d8842c913B26D87` | ~09-14 | core.perkContract 槽位持有者；白名单 {Perks新, Presale} 转发 redeemPerkExternal |
-| JackpotHoodPerks（JPH 质押→免费票，**新，指 router**） | `0x6baefD034328A827F1bd08D6F1DaAed1c5A0e098` | ~09-14 | config.js PERKS_ADDRESS 已指向此；旧 perks 里质押的 JPH 可随时 unstakeJph 取回（不依赖 core） |
-| **JackpotHoodPresale**（社区轮） | `0xa29c858E6d48b1d39a82E7009776c5D9f96b63D8` | ~09-14 | 预售 10 万张：阶梯价 0.0008/0.0009/0.001（20k/30k/50k 分界）、10 JPH/张、推荐 0.5 JPH/张、满 500 张送 NFT2、3 天期（主网 30 天）、finalize 60% 永久 stakeEth + 20/10/10 分账、未售 JPH 烧毁；已充 50 万 JPH |
-| **GenesisNFT2**（创世 NFT 新版，无 JPH 配额） | `0xB9E8311a105C92b0fcEDe203F95f1DFe050335d2` | ~09-14 | cap 1000、1/钱包、claim 需 presale.purchased≥500、adminAirdrop 支持快照空投 |
-| JackpotHoodPerks（JPH 质押→免费票，~~V4.4 旧~~） | `0x0959fF76cb5dccC2A403b3c255f4126b70f1bC2b` | 118940651 | 已被新 Perks 取代（core 槽位移交 router）；合约内质押 JPH 可正常 unstake |
+| **JackpotHood core**（主合约，**V4.5 当前版**） | `0x451D6b9Ceb23C8f6BE9C285cd3B7Db62EeDEBE00` | 122640404 | V4.4 全部特性 + **claim 侧推荐人拒收容错（refShare 并质押池）+ 推荐转账 50k gas 上限**（六路审计 M-1/L-1）；字节码 24309B；perkContract=新 router |
+| **PerkRouter（V4.5 配套）** | `0x6dE1F40951f0a8677e121A36857AB4e18E0F1dB7` | 122640404 | 白名单 {Perks新} |
+| JackpotHoodPerks（V4.5 配套，指 router） | `0xEABa2EDCe074C72e1E20bA6Cd711841c7912c2aC` | 122640404 | config.js PERKS_ADDRESS 已指向此 |
+| ~~旧 core V4.4~~（弃用，见 §9 迁移） | `0x9fCB876196586B828A5c42e4287fFCB3BAACc806` | 118940651 | 两段式退出+购票推荐立付版；**用户质押与未领奖金待迁移/领取**（rid 107 8.38 ETH、rid 506 0.91、分红 1.75、质押 ~45.98） |
+| ~~旧 PerkRouter V1~~ | `0x9f63Cfc9e7cE76efFd0209504d8842c913B26D87` | — | V4.4 配套，随 core 弃用 |
+| ~~旧 perks 0x6bae…~~ | `0x6baefD034328A827F1bd08D6F1DaAed1c5A0e098` | — | V4.4 配套 |
+| **HoodVRF**（链上可验证 VRF） | `0xBA8c0e39183BCD209caAFaE986D50cDD7E2Abb09` | ~09-18 | drand quicknet + EIP-2537 验签；设计 docs/vrf-design.md |
+| **JackpotHoodPresale**（社区轮，**已 finalize**） | `0xa29c858E6d48b1d39a82E7009776c5D9f96b63D8` | ~09-14 | sold=505；60%（0.2424 ETH）已永久质押入 V4.4 core、40% 已回 21ab；505 credits 已全部兑换 |
+| **GenesisNFT2** | `0xB9E8311a105C92b0fcEDe203F95f1DFe050335d2` | ~09-14 | cap 1000；supply=1（21ab #1） |
 | ~~旧 core V4.3~~（已弃用） | `0x12642673FA050fcA450d0519d833655A73e17E40` | 117782284 | 封顶版；质押已被用户自行提空；~1.37 ETH 池现金沉淀（奖池负债性质，无 admin 通道） |
 | ~~旧 core V4.2~~（已弃用） | `0xCD8726B6b3479fBe7415B8550d6Eb689e2950cc9` | 117716742 | 审计修复版，被 V4.3 封顶版取代；资金已提空 |
 | ~~旧 core V4.1~~（已弃用） | `0x94e407b923424E196F67B44F5F6d12116b95982A` | 117427193 | 批量上限版，被 V4.2 取代 |
@@ -277,8 +280,23 @@ robinhood/
     **链上 E2E 通过（随机数与链下预期逐字节一致，fulfill ≈216k gas）**。修复：EOA consumer 回调在本链会
     整体 revert → `_deliver` 跳过无代码地址。**当前版 0xBA8c…bb09**（旧 0x5249…d57F 弃用）。详见
     docs/vrf-design.md §8。剩余：relayer 循环（server.mjs）+ /vrf 状态页 + V5 core 集成，排在主网阶段。
+31. ✅ 09-18 开源上 GitHub（SANTOSRAYYYY/JACKPOTHOOD）：卫生检查（.env/cache/broadcast/_audit/日志全隔离，
+    零泄漏史）、合约 BUSL-1.1（2028-09-18 转 MIT，禁商业克隆）+ 其余 MIT、README 重写 + HoodVRF 集成示例。
+32. ✅ 09-22 **六路全面审计 + 全量修复**（docs/audit-report-2026-09-22.md）：High×2（XFF 绕限流实锤、
+    claim 丢失更新）与 Med×4 全部修复回归；**V4.5**（claim 推荐人容错 + 50k gas 上限，字节码 24309B 预算内，
+    core 0x451D…BE00 + router 0x6dE1…F1dB7 + perks 0xEABa…c2aC 已部署验证并接线）；server 修复含
+    **getLogs 分块扫描**（修复 leaderboard/streaks 线上瘫痪，实测 top1=11802 复活）、验签前移、限流全覆盖、
+    500 脱敏；测试 +48 → **192/192 绿**；链上账务 57.024 ETH 零偏差；9 个合约 Blockscout 源码验证；
+    预售 finalize（60% 永久质押）+ 505 credits 兑换完毕；V4.5 推荐立付链上冒烟通过。
+    **待办：用户旧 core 资金迁移（领 rid107/506 奖金+分红 1.75+两段式退出 ~45.98 ETH）后站点切 V4.5（revision 待定）。**
 
 ## 9. 遗留 / 下一步（用户关注点，按优先级）
+
+0. **V4.5 迁移（最高优先，等用户操作）**：站点镜像已构建（含后端修复+新 config），**暂未 deploy**——
+   切换后旧 core 停开奖，两段式退出将永远无法 finalize。用户须先在旧 core 完成：
+   ①领奖 rid 107（8.38 ETH）+ rid 506（0.91）②claimStakeRewards（1.75 ETH）
+   ③质押页「申请退出」全额（~45.98 ETH）→ 等一轮结算 →「完成退出」。
+   完成后我部署切站（CONTRACT_ADDRESS=0x451D…,CONTRACT_CREATED=122640404），用户重新质押入 V4.5。
 
 1. **用户验证**（09-10 现状：大字含质押 9.268 ETH；注意 **ticketBank=0**，此刻中奖赔付全额走质押现金）：
    硬刷新 www 看历史页/领奖均为 ETH；后台 /admin 批量免费票发到新 core
